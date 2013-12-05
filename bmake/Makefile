@@ -1,10 +1,13 @@
 SUBDIR=	\
 		libairpdcap \
+		libminitap \
+		libminishark \
 		libui \
 		libwiretap \
 		libwireshark \
 		libwsutil \
 		libwmem
-SUBDIR+=	tshark
+SUBDIR+=	minishark \
+		tshark
 
 .include <bsd.subdir.mk>
