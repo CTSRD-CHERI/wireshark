@@ -61,7 +61,9 @@
 #include <errno.h>
 #include <epan/packet.h>
 #include <epan/dissectors/packet-radius.h>
+#ifndef SANE_LEX
 #include "radius_dict_lex.h"
+#endif
 #include <wsutil/file_util.h>
 
 #ifdef _WIN32

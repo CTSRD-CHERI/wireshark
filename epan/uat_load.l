@@ -61,7 +61,9 @@
 
 #include <epan/emem.h>
 #include "uat-int.h"
+#ifndef SANE_LEX
 #include "uat_load_lex.h"
+#endif
 #include <wsutil/file_util.h>
 
 #ifdef _WIN32

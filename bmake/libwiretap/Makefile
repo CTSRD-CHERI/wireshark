@@ -2,4 +2,7 @@
 
 LIB=	wiretap
 
+CFLAGS+=	-I${.CURDIR}/.. \
+		-DSANE_LEX
+
 .include <bsd.lib.mk>

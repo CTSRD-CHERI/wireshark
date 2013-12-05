@@ -79,7 +79,9 @@
 #include "file_wrappers.h"
 #include "buffer.h"
 #include "k12.h"
+#ifndef SANE_LEX
 #include "k12text_lex.h"
+#endif
 
 #ifndef HAVE_UNISTD_H
 #define YY_NO_UNISTD_H

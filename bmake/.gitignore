@@ -1,12 +1,26 @@
+# Unignore Makefiles and explicitly checked in files that are normally
+# generated.
 !Makefile
-!Makefile.src
-libminishark/dtd_parse.c
-libminishark/dtd_preparse.c
-libminishark/uat_load.c
-libwireshark/dtd_parse.c
-libwireshark/dtd_preparse.c
-libwireshark/uat_load.c
-libwiretap/ascend.c
-libwiretap/ascend.h
-libwiretap/k12text.c
+!config.h
+!libminishark/dtd_grammar.c
+!libminishark/dtd_grammar.h
+!libminishark/grammar.c
+!libminishark/grammar.h
+!libwireshark/dtd_grammar.c
+!libwireshark/dtd_grammar.h
+!libwireshark/grammar.c
+!libwireshark/grammar.h
+
+# Ignore geneated files
+ascend.c
+ascend.h
+dtd_parse.c
+dtd_preparse.c
+uat_load.c
+k12text.c
+packet-ncp2222.c
+register.c
+register-cache.pkl
+sminmpec.c
+tshark-tap-register-cache.pkl
 minishark/minishark

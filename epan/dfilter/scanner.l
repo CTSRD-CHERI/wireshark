@@ -51,7 +51,9 @@
 #include "syntax-tree.h"
 #include "grammar.h"
 #include "dfunctions.h"
+#ifndef SANE_LEX
 #include "scanner_lex.h"
+#endif
 
 #ifdef _WIN32
 /* disable Windows VC compiler warning "signed/unsigned mismatch" associated  */

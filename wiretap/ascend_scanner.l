@@ -47,7 +47,9 @@
 #include "ascend.h"
 #include "ascend-int.h"
 #include "file_wrappers.h"
+#ifndef SANE_LEX
 #include "ascend_scanner_lex.h"
+#endif
 
 FILE_T yy_fh;
 extern char *ascend_ra_ptr;

@@ -788,7 +788,6 @@ DISSECTOR_SRCS+= \
 		packet-ncp-nmas.c \
 		packet-ncp-sss.c \
 		packet-ncp.c \
-		packet-ncp2222.c \
 		packet-ncs.c \
 		packet-ndmp.c \
 		packet-ndp.c \
@@ -1159,6 +1158,11 @@ DISSECTOR_SRCS+= \
 		packet-gsm_a_common.c \
 		packet-x11.c
 
+DISSECTOR_SRCS+=	packet-ncp2222.c
+CLEAN_FILES+=	packet-ncp2222.c
+packet-ncp2222.c: ${.CURDIR}/../../tools/ncp2222.py
+	python ${.CURDIR}/../../tools/ncp2222.py -o ${.TARGET}
+
 DISSECTOR_SUPPORT_SRCS= \
 		packet-ipmi-app.c \
 		packet-ipmi-bridge.c \
@@ -1171,7 +1175,12 @@ DISSECTOR_SUPPORT_SRCS= \
 		packet-ipmi-update.c \
 		packet-dcerpc-nt.c \
 		usb.c
+
 DISSECTOR_SUPPORT_SRCS+= register.c
+CLEAN_FILES+=	register.c register-cache.pkl
+register.c: ${DISSECTOR_SRCS}
+	python ${.CURDIR}/../../tools/make-dissector-reg.py /var/empty \
+	    dissectors ${.ALLSRC}
 
 .PATH: ${.CURDIR}/../../epan/ftypes
 FTYPE_SRCS= \
@@ -1237,7 +1246,6 @@ LIBWIRESHARK_SRCS= \
 	plugins.c \
 	prefs.c \
 	proto.c \
-	ps.c \
 	range.c \
 	reassemble.c \
 	reedsolomon.c \
@@ -1246,7 +1254,6 @@ LIBWIRESHARK_SRCS= \
 	show_exception.c \
 	sigcomp_state_hdlr.c \
 	sigcomp-udvm.c \
-	sminmpec.c \
 	sna-utils.c \
 	stat_cmd_args.c \
 	stats_tree.c \
@@ -1270,6 +1277,11 @@ LIBWIRESHARK_SRCS= \
 	uat_load.l
 # XXX generated
 LIBWIRESHARK_SRCS+=	dtd_grammar.c
+
+LIBWIRESHARK_SRCS+=	sminmpec.c
+CLEAN_FILES+=		sminmpec.c
+sminmpec.c: enterprise-numbers ${.CURDIR}/../../tools/make-sminmpec.pl
+	perl ${.CURDIR}/../../tools/make-sminmpec.pl enterprise-numbers
 
 SRCS+=	${CRYPT_SRCS} \
 	${DFILTER_SRCS} \

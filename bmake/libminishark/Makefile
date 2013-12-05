@@ -2,7 +2,9 @@
 
 LIB=	minishark
 
-CFLAGS+=	-DMINISHARK
+CFLAGS+=	-DMINISHARK \
+		-DSANE_LEX \
+		-I${.CURDIR}/..
 
 .PATH: ${.CURDIR}
 

@@ -66,7 +66,9 @@
 #include <errno.h>
 #include <stdio.h>
 #include "dtd.h"
+#ifndef SANE_LEX
 #include "dtd_preparse_lex.h"
+#endif
 #include <wsutil/file_util.h>
 
 #define ECHO g_string_append(current,yytext);

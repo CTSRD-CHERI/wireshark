@@ -1,6 +1,9 @@
 .include "Makefile.src"
 
 LIB=	minitap
-CFLAGS+=	-DMINISHARK
+
+CFLAGS+=	-I${.CURDIR}/.. \
+		-DMINISHARK \
+		-DSANE_LEX
 
 .include <bsd.lib.mk>

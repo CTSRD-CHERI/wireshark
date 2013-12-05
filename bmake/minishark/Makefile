@@ -9,11 +9,14 @@ SRCS=	capture_opts.c \
 	print.c \
 	tempfile.c \
 	timestats.c \
-	tshark-tap-register.c \
 	tshark.c \
 	${TSHARK_TAP_SRC} \
 	${SHARK_COMMON_CAPTURE_SRC} \
 	${WIRESHARK_COMMON_SRC}
+
+SRCS+=	ps.c
+ps.c: print.ps ${.CURDIR}/../../tools/rdps.py
+	python ${.CURDIR}/../../tools/rdps.py ${.CURDIR}/../../print.ps ps.c
 
 .PATH:	${.CURDIR}/../../ui/cli
 TSHARK_TAP_SRC= \
@@ -22,6 +25,12 @@ TSHARK_TAP_SRC= \
 	tap-icmpstat.c \
 	tap-icmpv6stat.c \
 	tap-stats_tree.c \
+
+SRCS+=	tshark-tap-register.c
+CLEAN_FILES+=	tshark-tap-register.c tshark-tap-register-cache.pkl
+tshark-tap-register.c: ${TSHARK_TAP_SRC}
+	python ${.CURDIR}/../../tools/make-tap-reg.py /var/empty \
+	    tshark-taps ${.ALLSRC}
 
 SHARK_COMMON_CAPTURE_SRC= \
 	capture_ifinfo.c \
@@ -38,6 +47,7 @@ WIRESHARK_COMMON_SRC= \
 
 CFLAGS+=	-DMINISHARK \
 		-I${.CURDIR} \
+		-I${.CURDIR}/.. \
 		-I${.CURDIR}/../.. \
 		-I${.CURDIR}/../../wiretap \
 		-I/usr/local/include/glib-2.0

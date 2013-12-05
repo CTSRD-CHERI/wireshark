@@ -18,7 +18,8 @@ SRCS=	\
 	version_info.c \
 	ws80211_utils.c
 
-CFLAGS+=	-I${.CURDIR}/../.. \
+CFLAGS+=	-I${.CURDIR}/.. \
+		-I${.CURDIR}/../.. \
 		-I${.CURDIR}/../../wiretap \
 		-I/usr/local/include/glib-2.0
 LDADD+=		-lpcap -lz \

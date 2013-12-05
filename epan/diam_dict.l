@@ -65,7 +65,9 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "diam_dict.h"
+#ifndef SANE_LEX
 #include "diam_dict_lex.h"
+#endif
 #include <wsutil/file_util.h>
 
 typedef struct entity_t {
