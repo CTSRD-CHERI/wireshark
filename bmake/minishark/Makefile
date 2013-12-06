@@ -54,14 +54,14 @@ CFLAGS+=	-DMINISHARK \
 
 .include <bsd.own.mk>
 
-.if defined(MK_SOAAP) && ${MK_SOAAP} != "no"
-.include "${.CURDIR}/../libminitap/Makefile.src"
-.include "${.CURDIR}/../libminishark/Makefile.src"
-.include "${.CURDIR}/../libwsutil/Makefile.src"
-.else
+.if !defined(MK_SOAAP) || ${MK_SOAAP} == "no"
 LDADD+=	-L../libminitap -L${.CURDIR}/../libminitap -lminitap \
 	-L../libminishark -L${.CURDIR}/../libminishark -lminishark \
 	-L../libwsutil -L${.CURDIR}/../libwsutil -l wsutil
+.else
+.include "${.CURDIR}/../libminitap/Makefile.src"
+.include "${.CURDIR}/../libminishark/Makefile.src"
+.include "${.CURDIR}/../libwsutil/Makefile.src"
 .endif
 
 LDADD+=	-lkrb5 -lm -lpcap -lz \
