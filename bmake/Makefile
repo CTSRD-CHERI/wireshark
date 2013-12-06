@@ -1,5 +1,4 @@
-SUBDIR=	\
-		libairpdcap \
+LIBDIRS=	libairpdcap \
 		libminitap \
 		libminishark \
 		libui \
@@ -7,7 +6,14 @@ SUBDIR=	\
 		libwireshark \
 		libwsutil \
 		libwmem
-SUBDIR+=	minishark \
+PROGDIRS=	minishark \
 		tshark
+
+TGTS=	all clean depend obj
+
+${TGTS}:
+.for _DIR in ${LIBDIRS} ${PROGDIRS}
+	${MAKE} -C ${_DIR} ${.TARGET}
+.endfor
 
 .include <bsd.subdir.mk>
