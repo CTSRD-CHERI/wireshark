@@ -1,5 +1,6 @@
 PROG=	tshark
 NO_MAN=
+NO_SHARED=
 
 .PATH:	${.CURDIR}/../..
 SRCS=	capture_opts.c \
@@ -89,10 +90,6 @@ CFLAGS+=	-I${.CURDIR} \
 
 .include <bsd.own.mk>
 
-LDADD+=	-lkrb5 -lm -lpcap -lz \
-	-L${SYSROOT}/usr/local/lib -lglib-2.0 -lgmodule-2.0 \
-	-L../libui -L${.CURDIR}/../libui -lui
-
 .if !defined(MK_SOAAP) || ${MK_SOAAP} == "no"
 LDADD+=	-L../libwiretap -L${.CURDIR}/../libwiretap -lwiretap \
 	-L../libwireshark -L${.CURDIR}/../libwireshark -lwireshark \
@@ -103,7 +100,11 @@ LDADD+=	-L../libwiretap -L${.CURDIR}/../libwiretap -lwiretap \
 .include "${.CURDIR}/../libwsutil/Makefile.src"
 .endif
 
+LDADD+=	-lkrb5 -lm -lpcap -lz \
+	-L${SYSROOT}/usr/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 \
+	-L../libui -L${.CURDIR}/../libui -lui
 LDADD+=	-L../libairpdcap -L${.CURDIR}../libairpdcap -lairpdcap \
-	-L../libwmem -L${.CURDIR}../libwmem -lwmem
+	-L../libwmem -L${.CURDIR}../libwmem -lwmem \
+	-pthread -liconv -lintl -lpcre
 
 .include <bsd.prog.mk>

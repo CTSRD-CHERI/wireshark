@@ -1,5 +1,6 @@
 PROG=	minishark
 NO_MAN=
+NO_SHARED=
 
 .PATH:	${.CURDIR}/../..
 SRCS=	capture_opts.c \
@@ -68,6 +69,7 @@ LDADD+=	-lkrb5 -lm -lpcap -lz \
 	-L${SYSROOT}/usr/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 \
 	-L../libui -L${.CURDIR}/../libui -lui
 LDADD+=	-L../libairpdcap -L${.CURDIR}../libairpdcap -lairpdcap \
-	-L../libwmem -L${.CURDIR}../libwmem -lwmem
+	-L../libwmem -L${.CURDIR}../libwmem -lwmem \
+	-pthread -liconv -lintl -lpcre
 
 .include <bsd.prog.mk>
