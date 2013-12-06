@@ -50,13 +50,9 @@ CFLAGS+=	-DMINISHARK \
 		-I${.CURDIR}/.. \
 		-I${.CURDIR}/../.. \
 		-I${.CURDIR}/../../wiretap \
-		-I/usr/local/include/glib-2.0
+		-I${SYSROOT}/usr/local/include/glib-2.0
 
 .include <bsd.own.mk>
-
-LDADD+=	-lkrb5 -lm -lpcap -lz \
-	-L/usr/local/lib -ladns -lglib-2.0 -lgmodule-2.0 -lGeoIP \
-	-L../libui -L${.CURDIR}/../libui -lui
 
 .if defined(MK_SOAAP) && ${MK_SOAAP} != "no"
 .include "${.CURDIR}/../libminitap/Makefile.src"
@@ -68,6 +64,9 @@ LDADD+=	-L../libminitap -L${.CURDIR}/../libminitap -lminitap \
 	-L../libwsutil -L${.CURDIR}/../libwsutil -l wsutil
 .endif
 
+LDADD+=	-lkrb5 -lm -lpcap -lz \
+	-L${SYSROOT}/usr/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 \
+	-L../libui -L${.CURDIR}/../libui -lui
 LDADD+=	-L../libairpdcap -L${.CURDIR}../libairpdcap -lairpdcap \
 	-L../libwmem -L${.CURDIR}../libwmem -lwmem
 
