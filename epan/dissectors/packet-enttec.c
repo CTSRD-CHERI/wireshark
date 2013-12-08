@@ -191,8 +191,8 @@ dissect_enttec_dmx_data(tvbuff_t *tvb, guint offset, proto_tree *tree)
 		"%3u: %s"
 	};
 
-	guint8 *dmx_data = (guint8 *)ep_alloc(512 * sizeof(guint8));
-	guint16 *dmx_data_offset = (guint16 *)ep_alloc(513 * sizeof(guint16)); /* 1 extra for last offset */
+	static guint8 dmx_data[512];
+	static guint16 dmx_data_offset[513]; /* 1 extra for last offset */
 	emem_strbuf_t *dmx_epstr;
 
 	proto_tree *hi,*si;
@@ -229,7 +229,7 @@ dissect_enttec_dmx_data(tvbuff_t *tvb, guint offset, proto_tree *tree)
 		/* uncompress the DMX data */
 		ui = 0;
 		ci = 0;
-		while (ci < length && ui < 512) {
+		while (ci < length) {
 			v = tvb_get_guint8(tvb, offset+ci);
 			if (v == 0xFE) {
 				ci++;
@@ -237,7 +237,7 @@ dissect_enttec_dmx_data(tvbuff_t *tvb, guint offset, proto_tree *tree)
 				ci++;
 				v = tvb_get_guint8(tvb, offset+ci);
 				ci++;
-				for (i=0;i < count && ui < 512;i++) {
+				for (i=0;i < count;i++) {
 					dmx_data[ui] = v;
 					dmx_data_offset[ui] = ci-3;
 					ui++;
