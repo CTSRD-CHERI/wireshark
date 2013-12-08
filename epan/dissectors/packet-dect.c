@@ -25,59 +25,34 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 /*
  TODO (roughly in that order)
- - Expand beyond full slot, 2-level modulation
+ - Don't use structs to access the elements in the datastream
+   (i.e. pkt_afield, pkt_bfield).
+ - Add references to documentation (ETSI EN 300 175 parts 1-8)
  - Make things stateful
  - Once the capture format has stabilized, get rid of the Ethernet
-   hack and use a proper capture type.
+ hack and use a proper capture type.
  */
 
 #include "config.h"
 
-#include <string.h>
-
-#include <glib.h>
-
 #include <epan/packet.h>
 #include <epan/etypes.h>
+#include <string.h>
 
-#define ETHERTYPE_DECT 0x2323
+#define ETHERTYPE_DECT 0x2323				/* move to epan/etypes.h */
 
-#define DECT_PACKET_INFO_LEN 11
+#define DECT_PACKET_PP	0
+#define DECT_PACKET_FP	1
 
-#define DECT_PACKET_PP 0
-#define DECT_PACKET_FP 1
+#define DECT_PACKET_INFO_LEN	11
 
-#define DECT_AFIELD_SIZE      8
-#define DECT_AFIELD_TAIL_SIZE 5
-#define DECT_BFIELD_DATA_SIZE 128
-
-#define DECT_A_TA_MASK 0xE0
-#define DECT_A_TA_SHIFT 5
-#define DECT_A_BA_MASK 0x0E
-#define DECT_A_BA_SHIFT 1
-#define DECT_A_Q1_MASK 0x10
-#define DECT_A_Q2_MASK 0x01
-
-enum {
-	DECT_TA_CT0 = 0,
-	DECT_TA_CT1,
-	DECT_TA_NT_CL,
-	DECT_TA_NT,
-	DECT_TA_QT,
-	DECT_TA_ESC,
-	DECT_TA_MT,
-	DECT_TA_PT,
-	DECT_TA_MT_FIRST = DECT_TA_PT
-};
-
-/* ETSI EN 300 175-3 V2.3.0  6.2.4 and Annex E */
 /* scramble table with corrections by Jakub Hruska */
-static const guint8 scrt[8][31]=
+static guint8 scrt[8][31]=
 {
 	{0x3B, 0xCD, 0x21, 0x5D, 0x88, 0x65, 0xBD, 0x44, 0xEF, 0x34, 0x85, 0x76, 0x21, 0x96, 0xF5, 0x13, 0xBC, 0xD2, 0x15, 0xD8, 0x86, 0x5B, 0xD4, 0x4E, 0xF3, 0x48, 0x57, 0x62, 0x19, 0x6F, 0x51},
 	{0x32, 0xDE, 0xA2, 0x77, 0x9A, 0x42, 0xBB, 0x10, 0xCB, 0x7A, 0x89, 0xDE, 0x69, 0x0A, 0xEC, 0x43, 0x2D, 0xEA, 0x27, 0x79, 0xA4, 0x2B, 0xB1, 0x0C, 0xB7, 0xA8, 0x9D, 0xE6, 0x90, 0xAE, 0xC4},
@@ -89,8 +64,18 @@ static const guint8 scrt[8][31]=
 	{0x79, 0xA4, 0x2B, 0xB1, 0x0C, 0xB7, 0xA8, 0x9D, 0xE6, 0x90, 0xAE, 0xC4, 0x32, 0xDE, 0xA2, 0x77, 0x9A, 0x42, 0xBB, 0x10, 0xCB, 0x7A, 0x89, 0xDE, 0x69, 0x0A, 0xEC, 0x43, 0x2D, 0xEA, 0x27}
 };
 
-void proto_register_dect (void);
-void proto_reg_handoff_dect (void);
+struct dect_afield
+{
+	guint8	Header;
+	guint8	Tail[5];
+	guint16	RCRC;
+};
+
+struct dect_bfield
+{
+	guint8	Data[128];
+	guint8	Length;
+};
 
 static int proto_dect = -1;
 
@@ -113,8 +98,8 @@ static int hf_dect_rssi				= -1;
 static int hf_dect_slot				= -1;
 static int hf_dect_cc				= -1;
 static int hf_dect_cc_TA			= -1;
-static int hf_dect_cc_AField			= -1;
-static int hf_dect_cc_BField			= -1;
+static int hf_dect_cc_AField		= -1;
+static int hf_dect_cc_BField		= -1;
 static int hf_dect_A				= -1;
 static int hf_dect_A_Head			= -1;
 static int hf_dect_A_Head_TA_FP			= -1;
@@ -208,7 +193,7 @@ static int hf_dect_A_Tail_Qt_4_A47		= -1;
 static int hf_dect_A_Tail_Qt_6_Spare		= -1;
 static int hf_dect_A_Tail_Qt_6_Mfn		= -1;
 static int hf_dect_A_Tail_Mt_Mh			= -1;
-static int hf_dect_A_Tail_Mt_Mh_attr		= -1;
+static int hf_dect_A_Tail_Mt_Mh_attr	= -1;
 static int hf_dect_A_Tail_Mt_Mh_fmid		= -1;
 static int hf_dect_A_Tail_Mt_Mh_pmid		= -1;
 static int hf_dect_A_Tail_Mt_BasicConCtrl	= -1;
@@ -217,7 +202,7 @@ static int hf_dect_A_Tail_Mt_Encr_Cmd2		= -1;
 static int hf_dect_A_Tail_Pt_ExtFlag		= -1;
 static int hf_dect_A_Tail_Pt_SDU		= -1;
 static int hf_dect_A_Tail_Pt_RFPI		= -1;
-static int hf_dect_A_Tail_Pt_BsData		= -1;
+static int hf_dect_A_Tail_Pt_BsData		= -1; 
 static int hf_dect_A_Tail_Pt_InfoType		= -1;
 static int hf_dect_A_Tail_Pt_SlotPairs		= -1;
 static int hf_dect_A_Tail_Pt_Fillbits		= -1;
@@ -238,7 +223,6 @@ static const value_string tranceiver_mode[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.1.2 */
 static const value_string TA_vals_FP[]=
 {
 	{0, "Ct Next Data Packet"},
@@ -252,7 +236,6 @@ static const value_string TA_vals_FP[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.1.2 */
 static const value_string TA_vals_PP[]=
 {
 	{0, "Ct Next Data Packet"},
@@ -266,7 +249,6 @@ static const value_string TA_vals_PP[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.1.4 */
 static const value_string BA_vals[]=
 {
 	{0, "U-Type, In, SIn or Ip Packet No. 0 or No Valid Ip_error_detect Channel Data"},
@@ -280,9 +262,8 @@ static const value_string BA_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.1 */
 static const value_string QTHead_vals[]=
-{
+{ /* EN 300 175-3 V2.3.0  7.2.3.1 */
 	{0, "Static System Info"},
 	{1, "Static System Info"},
 	{2, "Extended RF Carriers Part 1"},
@@ -302,7 +283,6 @@ static const value_string QTHead_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.2 */
 static const value_string QTNormalReverse_vals[]=
 {
 	{0, "Normal RFP Transmit Half-Frame"},
@@ -310,7 +290,6 @@ static const value_string QTNormalReverse_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.3 */
 static const value_string QTSlotNumber_vals[]=
 {
 	{0, "Slot Pair 0/12"},
@@ -332,7 +311,6 @@ static const value_string QTSlotNumber_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.4 */
 static const value_string QTStartPosition_vals[]=
 {
 	{0, "S-Field starts at Bit F0"},
@@ -342,7 +320,6 @@ static const value_string QTStartPosition_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.5 */
 static const value_string QTEscape_vals[]=
 {
 	{0, "No QT Escape is broadcast"},
@@ -350,7 +327,6 @@ static const value_string QTEscape_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.6 */
 static const value_string QTTranceiver_vals[]=
 {
 	{0, "RFP has 1 Transceiver"},
@@ -360,7 +336,6 @@ static const value_string QTTranceiver_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.7 */
 static const value_string QTExtendedCarrier_vals[]=
 {
 	{0, "No Extended RF Carrier Information Message"},
@@ -368,8 +343,6 @@ static const value_string QTExtendedCarrier_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.9 */
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.11 */
 static const value_string QTSpr_vals[]=
 {
 	{0, "OK"},
@@ -379,7 +352,6 @@ static const value_string QTSpr_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.10 */
 static const value_string QTCarrierNumber_vals[]=
 {
 	{0, "RF Carrier 0"},
@@ -449,7 +421,6 @@ static const value_string QTCarrierNumber_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.2.12 */
 static const value_string QTScanCarrierNum_vals[]=
 {
 	{0, "Primary Scan next on RF Carrier 0"},
@@ -519,7 +490,6 @@ static const value_string QTScanCarrierNum_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.4.2 */
 static const value_string Qt_A12_vals[]=
 {
 	{0, "   Extended FP Info"},
@@ -660,7 +630,6 @@ static const value_string Qt_A31_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-5 V2.3.0  Annex F */
 static const value_string Qt_A32_vals[]=
 {
 	{0, "   ADPCM/G.726 Voice service"},
@@ -781,7 +750,6 @@ static const value_string Qt_EA20_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.5.2.1 */
 static const value_string Qt_CRFPHops_vals[]=
 {
 	{0, "1 CRFP is allowed"},
@@ -814,7 +782,6 @@ static const value_string Qt_REPCap_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.5.2.2 */
 static const value_string Qt_Sync_vals[]=
 {
 	{0, "standard, see EN 300 175-2 [2], clauses 4.6 and 5.2"},
@@ -824,7 +791,6 @@ static const value_string Qt_Sync_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.5.2.3 */
 static const value_string Qt_MACSusp_vals[]=
 {
 	{0, "Suspend and Resume not supported"},
@@ -832,7 +798,6 @@ static const value_string Qt_MACSusp_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.5.2.4 */
 static const value_string Qt_MACIpq_vals[]=
 {
 	{0, "Ipq not supported"},
@@ -840,7 +805,6 @@ static const value_string Qt_MACIpq_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.3.5.2 */
 static const value_string Qt_EA23_vals[]=
 {
 	{0, "   Extended Fixed Part Info 2"},
@@ -855,7 +819,6 @@ static const value_string Qt_EA24_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-5 V2.3.0  Annex F */
 static const value_string Qt_EA25_vals[]=
 {
 	{0, "   F-MMS Interworking profile supported"},
@@ -1017,7 +980,9 @@ static const value_string Qt_EA47_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.5.1 */
+
+
+
 static const value_string MTHead_vals[]=
 {
 	{0, "Basic Connection Control"},
@@ -1039,7 +1004,6 @@ static const value_string MTHead_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.5.2 */
 static const value_string MTBasicConCtrl_vals[]=
 {
 	{0, "Access Request"},
@@ -1061,7 +1025,6 @@ static const value_string MTBasicConCtrl_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.5.7 */
 static const value_string MTEncrCmd1_vals[]=
 {
 	{0, "Start Encryption"},
@@ -1080,17 +1043,15 @@ static const value_string MTEncrCmd2_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.4.2.2 */
 static const value_string PTExtFlag_vals[]=
-{
+{	/* EN 300 175-3 V2.3.0   7.2.4.2.2 */
 	{0, "Next normal Page in Frame 0"},
 	{1, "Another Page in next Frame"},
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.4.2.3 */
 static const value_string PTSDU_vals[]=
-{
+{	/* EN 300 175-3 V2.3.0   7.2.4.2.3 */
 	{0, "Zero Length Page"},
 	{1, "Short Page"},
 	{2, "Full Page"},
@@ -1102,7 +1063,6 @@ static const value_string PTSDU_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.4.3.1 */
 static const value_string PTInfoType_vals[]=
 {
 	{0, "Fill Bits"},
@@ -1124,7 +1084,6 @@ static const value_string PTInfoType_vals[]=
 	{0, NULL}
 };
 
-/* ETSI EN 300 175-3 V2.3.0  7.2.4.3.10 */
 static const value_string PTRFPPower_vals[]=
 {
 	{0, "0 dBm"},
@@ -1146,13 +1105,16 @@ static const value_string PTRFPPower_vals[]=
 	{0, NULL}
 };
 
-
 static unsigned char
 dect_getbit(guint8 *data, int bit)
 {
+	guint8 c;
 	guint8 byte=data[bit/8];
 
-	return (byte>>bit%8)&1;
+	c=1;
+	c<<=bit%8;
+
+	return (byte&c)>>bit%8;
 }
 
 static void
@@ -1164,7 +1126,6 @@ dect_setbit(guint8 *data, int bit, guint8 value)
 		data[bit/8]|=(1<<(bit%8));
 }
 
-/* EN 300 175-3 V2.3.0  6.2.5.4 */
 static guint8
 calc_xcrc(guint8* data, guint8 length)
 {
@@ -1174,8 +1135,7 @@ calc_xcrc(guint8* data, guint8 length)
 	guint8 next;
 	int y, x;
 
-	memset(bits, 0, sizeof(bits));
-	for(y=0;y<=length-4;y++)
+	for(y=0;y<80;y++)
 	{
 		dect_setbit(bits, y, dect_getbit(data, y+48*(1+(int)(y/16))));
 	}
@@ -1210,14 +1170,14 @@ calc_xcrc(guint8* data, guint8 length)
 			crc^=(gp<<4);
 		}
 	}
+/* 	crc^=0x10; */
 	return crc;
 }
 
-/* EN 300 175-3 V2.3.0  6.2.5.2 */
 static guint16
 calc_rcrc(guint8* data)
 {
-	guint16 gp=0x0589; /* 10000010110001001 without the leading 1 */
+	guint16 gp=0x0589;		/* 10000010110001001 without the leading 1 */
 
 	guint16 crc;
 	guint8 next;
@@ -1254,36 +1214,24 @@ calc_rcrc(guint8* data)
 	return crc;
 }
 
-/* ETSI EN 300 175-3 V2.3.0  6.2.1.3 */
 static gint
-dissect_bfield(gboolean dect_packet_type _U_, guint8 ba,
-	packet_info *pinfo _U_, tvbuff_t *tvb, gint offset, proto_tree *DectTree, proto_tree *ColumnsTree)
+dissect_bfield(gboolean dect_packet_type _U_, guint8 a_header,
+	struct dect_bfield *pkt_bfield, packet_info *pinfo _U_, const guint8 *pkt_ptr _U_,
+	tvbuff_t *tvb, proto_item *ti _U_, proto_tree *DectTree, gint offset, proto_tree *ColumnsTree)
 {
-	guint8 xcrc/*, xcrclen*/;
+	guint8 xcrc, xcrclen;
 	guint16 blen;
-	gint start_offset;
-	const char *bfield_str;
-	const char *bfield_short_str;
-
-	proto_item *bfieldti        = NULL;
-	proto_tree *BField          = NULL;
+	gint oldoffset, fn;
+	char *bfield_str;
+	char *bfield_short_str;
+	proto_item *bfieldti	=NULL;
+	proto_tree *BField	=NULL;
 
 	proto_item *bfdescrdatati   = NULL;
 	proto_tree *BFDescrData	    = NULL;
 
-	guint8 bfield_data[DECT_BFIELD_DATA_SIZE];
-	guint bfield_length = tvb_length_remaining(tvb, offset);
-
-	if (bfield_length > DECT_BFIELD_DATA_SIZE)
-		bfield_length = DECT_BFIELD_DATA_SIZE;
-
-	if (bfield_length)
-		tvb_memcpy(tvb, bfield_data, offset, bfield_length);
-	else
-		memset(bfield_data, 0, DECT_BFIELD_DATA_SIZE);
-
 	/* B-Field */
-	switch(ba)
+	switch((a_header&0x0E)>>1)
 	{
 	case 0:
 	case 1:
@@ -1291,21 +1239,21 @@ dissect_bfield(gboolean dect_packet_type _U_, guint8 ba,
 	case 5:
 	case 6:
 		blen=40;
-		/*xcrclen=4;*/
+		xcrclen=4;
 
 		bfield_short_str="Full Slot";
 		bfield_str="Full Slot (320 bit data, 4 bit xcrc)";
 		break;
 	case 2:
 		blen=100;
-		/*xcrclen=4;*/
+		xcrclen=4;
 
 		bfield_short_str="Double Slot";
 		bfield_str="Double Slot (800 bit data, 4 bit xcrc)";
 		break;
 	case 4:
 		blen=10;
-		/*xcrclen=4;*/
+		xcrclen=4;
 
 		bfield_short_str="Half Slot";
 		bfield_str="Half Slot (80 bit data, 4 bit xcrc)";
@@ -1313,37 +1261,37 @@ dissect_bfield(gboolean dect_packet_type _U_, guint8 ba,
 	case 7:
 	default:
 		blen=0;
-		/*xcrclen=0;*/
+		xcrclen=0;
 
 		bfield_short_str="No B-Field";
 		bfield_str="No B-Field";
 		break;
+
 	}
 
 	proto_tree_add_string(ColumnsTree, hf_dect_cc_BField, tvb, offset, 1, bfield_short_str);
 
 	if(blen)
 	{
-		bfieldti		= proto_tree_add_item(DectTree, hf_dect_B, tvb, offset, blen, ENC_NA);
-		BField			= proto_item_add_subtree(bfieldti, ett_bfield);
+		bfieldti	= proto_tree_add_item(DectTree, hf_dect_B, tvb, offset, 40, FALSE);
+		BField		= proto_item_add_subtree(bfieldti, ett_bfield);
 
-		proto_tree_add_none_format(BField, hf_dect_B_Data, tvb, offset, blen, "%s", bfield_str);
+		proto_tree_add_none_format(BField, hf_dect_B_Data, tvb, offset, 40, "%s", bfield_str);
 
-		bfdescrdatati	= proto_tree_add_item(BField, hf_dect_B_DescrambledData, tvb, offset, blen, ENC_NA);
+		bfdescrdatati	= proto_tree_add_item(BField, hf_dect_B_DescrambledData, tvb, offset, 40, FALSE);
 		BFDescrData		= proto_item_add_subtree(bfdescrdatati, ett_bfdescrdata);
 	}
 
-	start_offset=offset;
+	oldoffset=offset;
 
-	if(blen<=bfield_length)
+	if(blen<=pkt_bfield->Length)
 	{
-		gint fn;
 		guint16 x, y;
 		for(fn=0;fn<8;fn++)
 		{
 			guint16 bytecount=0;
 
-			offset=start_offset;
+			offset=oldoffset;
 
 			proto_tree_add_none_format(BFDescrData, hf_dect_B_fn, tvb, offset, 0, "Framenumber %u/%u", fn, fn+8);
 			for(x=0;x<blen;x+=16)
@@ -1366,30 +1314,27 @@ dissect_bfield(gboolean dect_packet_type _U_, guint8 ba,
 					if((x+y)>=blen)
 						break;
 
-					ep_strbuf_append_printf(string,"%.2x ", bfield_data[x+y]^scrt[fn][bytecount%31]);
+					ep_strbuf_append_printf(string,"%.2x ", pkt_bfield->Data[x+y]^scrt[fn][bytecount%31]);
 					bytecount++;
 				}
 				proto_tree_add_none_format(BFDescrData, hf_dect_B_Data, tvb, offset, y, "Data: %s", string->str);
 				offset+=y;
 			}
+			}
 		}
-	}
 	else
 		proto_tree_add_none_format(BField, hf_dect_B_Data, tvb, offset, 0, "Data too Short");
 
-	if(blen==40)
-		xcrc=calc_xcrc(bfield_data, 83);
-	else
-		xcrc=0;
+		xcrc=calc_xcrc(pkt_bfield->Data, 83);
 
-	if((unsigned)(blen+1)<=bfield_length)
+	if((blen+1)<=pkt_bfield->Length)
 	{
-		if(xcrc!=(bfield_data[40]&0xf0))
+		if(xcrc!=(pkt_bfield->Data[40]&0xf0))
 			/* XXX: pkt_bfield->Data[40]&0xf0 isn't really the Recv value?? */
-			proto_tree_add_uint_format(bfieldti, hf_dect_B_XCRC, tvb, offset, 1, 0, "X-CRC Error (Calc:%.2x, Recv:%.2x)",xcrc, bfield_data[40]&0xf0);
+			proto_tree_add_uint_format(bfieldti, hf_dect_B_XCRC, tvb, offset, 1, 0, "X-CRC Error (Calc:%.2x, Recv:%.2x)", xcrc, pkt_bfield->Data[40]&0xf0);
 		else
 			/* XXX: pkt_bfield->Data[40]&0xf0 isn't really the Recv value?? */
-			proto_tree_add_uint_format(bfieldti, hf_dect_B_XCRC, tvb, offset, 1, 1, "X-CRC Match (Calc:%.2x, Recv:%.2x)", xcrc, bfield_data[40]&0xf0);
+			proto_tree_add_uint_format(bfieldti, hf_dect_B_XCRC, tvb, offset, 1, 1, "X-CRC Match (Calc:%.2x, Recv:%.2x)", xcrc, pkt_bfield->Data[40]&0xf0);
 	}
 	else
 		proto_tree_add_uint_format(bfieldti, hf_dect_B_XCRC, tvb, offset, 1, 0, "No X-CRC logged (Calc:%.2x)", xcrc);
@@ -1397,124 +1342,118 @@ dissect_bfield(gboolean dect_packet_type _U_, guint8 ba,
 	return offset;
 }
 
-/* ETSI EN 300 175-3 V2.3.0  6.2.1.2 */
 static void
-dissect_afield(gboolean dect_packet_type, guint8 *ba,
-	packet_info *pinfo _U_, tvbuff_t *tvb, gint offset, proto_tree *DectTree, proto_tree *ColumnsTree)
+dissect_decttype(gboolean dect_packet_type, struct dect_afield *pkt_afield,
+	struct dect_bfield *pkt_bfield, packet_info *pinfo, const guint8 *pkt_ptr,
+	tvbuff_t *tvb, proto_item *ti, proto_tree *DectTree)
 {
-	guint8 ta;
+	guint16 rcrc;
 	guint8 rcrcdat[8];
-	guint16 computed_rcrc;
+	gint offset			= DECT_PACKET_INFO_LEN;
+	guint8 tailtype		=0;
 	emem_strbuf_t *afield_str;
 
-	proto_item *afieldti	= NULL;
-	proto_item *aheadti	= NULL;
-	proto_item *atailti	= NULL;
-	proto_tree *AField	= NULL;
-	proto_tree *AHead	= NULL;
-	proto_tree *ATail	= NULL;
+	proto_tree *ColumnsTree = NULL;
+	proto_item *columnstreeti = NULL;
+
+	proto_item *afieldti	=NULL;
+	proto_item *aheadti	=NULL;
+	proto_item *atailti	=NULL;
+	proto_tree *AField	=NULL;
+	proto_tree *AHead	=NULL;
+	proto_tree *ATail	=NULL;
 
 	guint8	header, tail_0, tail_1, tail_2, tail_3, tail_4;
-	guint16	rcrc;
 
-	afield_str = ep_strbuf_new(NULL);
+	/************************** Custom Columns ****************************/
+	columnstreeti	= proto_tree_add_item(DectTree, hf_dect_cc, tvb,0,0, FALSE);
+	ColumnsTree		= proto_item_add_subtree(columnstreeti, ett_afield);
+
+	afield_str		= ep_strbuf_new(NULL);
+
+	col_append_fstr(pinfo->cinfo, COL_INFO, "Use Custom Columns for Infos");
 
 	/************************** A-Field ***********************************/
 
-	/* ETSI EN 300 175-3 V2.3.0  7.1.1, 7.2.1
-	 *
-	 *  |   TA   |Q1|   BA   |Q2|        Tail       |    R-CRC    |
-	 *  +-----------------------+--------/ /--------+-------------+
-	 *  |a0 a1 a2 a3 a4 a5 a6 a7|a8  |    |    | a47|a48   |   a63|
-	 */
-
 	/* A-Field */
-	header = tvb_get_guint8(tvb, offset+0);
-	tail_0 = tvb_get_guint8(tvb, offset+1);
-	tail_1 = tvb_get_guint8(tvb, offset+2);
-	tail_2 = tvb_get_guint8(tvb, offset+3);
-	tail_3 = tvb_get_guint8(tvb, offset+4);
-	tail_4 = tvb_get_guint8(tvb, offset+5);
-	rcrc = tvb_get_ntohs(tvb, offset+6);
-
-	ta = (header & DECT_A_TA_MASK) >> DECT_A_TA_SHIFT;
-	*ba = (header & DECT_A_BA_MASK) >> DECT_A_BA_SHIFT;
-
-	afieldti	= proto_tree_add_item(DectTree, hf_dect_A, tvb, offset, DECT_AFIELD_SIZE, ENC_NA);
+	header=tvb_get_guint8(tvb, offset+0);
+	tail_0=tvb_get_guint8(tvb, offset+1);
+	tail_1=tvb_get_guint8(tvb, offset+2);
+	tail_2=tvb_get_guint8(tvb, offset+3);
+	tail_3=tvb_get_guint8(tvb, offset+4);
+	tail_4=tvb_get_guint8(tvb, offset+5);
+	tailtype	= header >> 5;
+	afieldti	= proto_tree_add_item(DectTree, hf_dect_A, tvb, offset, 8, FALSE);
 	AField		= proto_item_add_subtree(afieldti, ett_afield);
 
 	/* Header */
-	aheadti		= proto_tree_add_item(AField, hf_dect_A_Head, tvb, offset, 1, ENC_BIG_ENDIAN);
+	aheadti		= proto_tree_add_item(afieldti, hf_dect_A_Head, tvb, offset, 1, FALSE);
 	AHead		= proto_item_add_subtree(aheadti, ett_ahead);
 
 	if(dect_packet_type==DECT_PACKET_FP)
-		proto_tree_add_item(AHead, hf_dect_A_Head_TA_FP, tvb, offset, 1, ENC_BIG_ENDIAN);
+		proto_tree_add_item(AHead, hf_dect_A_Head_TA_FP, tvb, offset, 1, FALSE);
 	else
-		proto_tree_add_item(AHead, hf_dect_A_Head_TA_PP, tvb, offset, 1, ENC_BIG_ENDIAN);
+		proto_tree_add_item(AHead, hf_dect_A_Head_TA_PP, tvb, offset, 1, FALSE);
 
-	proto_tree_add_item(AHead, hf_dect_A_Head_Q1, tvb, offset, 1, ENC_BIG_ENDIAN);
-	proto_tree_add_item(AHead, hf_dect_A_Head_BA, tvb, offset, 1, ENC_BIG_ENDIAN);
-	proto_tree_add_item(AHead, hf_dect_A_Head_Q2, tvb, offset, 1, ENC_BIG_ENDIAN);
+	proto_tree_add_item(AHead, hf_dect_A_Head_Q1, tvb, offset, 1, FALSE);
+	proto_tree_add_item(AHead, hf_dect_A_Head_BA, tvb, offset, 1, FALSE);
+	proto_tree_add_item(AHead, hf_dect_A_Head_Q2, tvb, offset, 1, FALSE);
 	offset++;
 
 	/* Tail */
 	if(dect_packet_type==DECT_PACKET_FP)
 	{
-		atailti = proto_tree_add_none_format(afieldti, hf_dect_A_Tail, tvb, offset, 5,
-			"FP-Tail: %s", val_to_str(ta, TA_vals_FP, "Error, please report: %d"));
+		atailti = proto_tree_add_none_format(afieldti, hf_dect_A_Tail, tvb, offset, 5, 
+			"FP-Tail: %s", val_to_str(tailtype, TA_vals_FP, "Error, please report: %d"));
 	}
 	else
 	{
-		atailti = proto_tree_add_none_format(afieldti, hf_dect_A_Tail, tvb, offset, 5,
-			"PP-Tail: %s", val_to_str(ta, TA_vals_PP, "Error, please report: %d"));
+		atailti = proto_tree_add_none_format(afieldti, hf_dect_A_Tail, tvb, offset, 5, 
+			"PP-Tail: %s", val_to_str(tailtype, TA_vals_PP, "Error, please report: %d"));
 	}
 
 	ATail = proto_item_add_subtree(atailti, ett_atail);
 
-	if((ta==DECT_TA_CT0)||(ta==DECT_TA_CT1))
+	if((tailtype==0)||(tailtype==1))		/* Ct */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  10.8.1.1.1 */
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_TA, tvb, offset, 1, "[Ct]");
 
-		if(ta==DECT_TA_CT0)
+		if(tailtype==0)
 			ep_strbuf_append_printf(afield_str,"C-Channel Next  Data: %s",tvb_bytes_to_str(tvb, offset, 5));
 		else
 			ep_strbuf_append_printf(afield_str,"C-Channel First Data: %s",tvb_bytes_to_str(tvb, offset, 5));
 
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 	}
-	else if((ta==DECT_TA_NT)||(ta==DECT_TA_NT_CL))
+	else if((tailtype==2)||(tailtype==3))		/* Nt, Nt connectionless bearer */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  7.2.2 */
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_TA, tvb, offset, 1, "[Nt]");
 
 		ep_strbuf_append_printf(afield_str,"RFPI: %s",tvb_bytes_to_str(tvb, offset, 5));
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 
-		proto_tree_add_item(atailti, hf_dect_A_Tail_Nt, tvb, offset, 5, ENC_NA);
+		proto_tree_add_item(atailti, hf_dect_A_Tail_Nt, tvb, offset, 5, FALSE);
 	}
-	else if(ta==DECT_TA_QT)
+	else if(tailtype==4)				/* Qt */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  7.2.3 */
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_TA, tvb, offset, 1, "[Qt]");
 
-		proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_Qh, tvb, offset, 1, ENC_BIG_ENDIAN);
+		proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_Qh, tvb, offset, 1, FALSE);
 
 		switch(tail_0>>4)
 		{
 		case 0:		/* Static System Info */
 		case 1:
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.2 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Static System Info");
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Nr, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Sn, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Nr, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Sn, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Sp, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Esc, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Txs, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Mc, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Sp, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Esc, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Txs, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Mc, tvb, offset, 1, FALSE);
 
 			proto_tree_add_none_format(ATail, hf_dect_A_Tail_Qt_0_CA, tvb, offset, 2, " Carrier%s%s%s%s%s%s%s%s%s%s available",
 				(tail_1&0x02)?" 0":"", (tail_1&0x01)?" 1":"", (tail_2&0x80)?" 2":"",
@@ -1523,173 +1462,163 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 				(tail_2&0x01)?" 9":"");
 			offset+=2;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Spr1, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Cn, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Spr1, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Cn, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Spr2, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_PSCN, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_Spr2, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_0_PSCN, tvb, offset, 1, FALSE);
 			offset++;
 			/* due to addition further down */
 			offset-=5;
 			break;
 		case 2:		/* Extended RF Carriers Part 1 */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.3 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Extended RF Carriers Part 1");
-			/* TODO */
+			/* TODO: See ETSI EN 300 175-3 V2.3.0  7.2.3.3 */
 			break;
 		case 3:		/* Fixed Part Capabilities */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.4 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Fixed Part Capabilities");
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A12, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A13, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A14, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A15, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A12, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A13, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A14, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A15, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A16, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A17, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A18, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A19, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A20, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A21, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A22, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A23, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A16, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A17, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A18, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A19, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A20, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A21, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A22, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A23, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A24, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A25, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A26, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A27, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A28, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A29, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A30, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A31, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A24, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A25, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A26, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A27, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A28, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A29, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A30, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A31, tvb, offset, 1, FALSE);
 			offset++;
 
 
 			/* higher layer capabilities */
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A32, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A33, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A34, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A35, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A36, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A37, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A38, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A39, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A32, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A33, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A34, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A35, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A36, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A37, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A38, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A39, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A40, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A41, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A42, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A43, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A44, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A45, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A46, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A47, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A40, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A41, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A42, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A43, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A44, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A45, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A46, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_3_A47, tvb, offset, 1, FALSE);
 			offset++;
 
 			/* due to addition further down */
 			offset-=5;
 			break;
 		case 4:		/* Extended Fixed Part Capabilities */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.5 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Extended Fixed Part Capabilities");
 
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_CRFPHops, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_CRFPEnc, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_REFHops, tvb, offset, 2, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_CRFPHops, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_CRFPEnc, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_REFHops, tvb, offset, 2, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_REPCap, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_Sync, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A20, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_MACSusp, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_MACIpq, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A23, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_REPCap, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_Sync, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A20, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_MACSusp, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_MACIpq, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A23, tvb, offset, 1, FALSE);
 			offset++;
 
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A24, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A24, tvb, offset, 1, FALSE);
 
 			/* higher layer capabilities */
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A25, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A26, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A27, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A28, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A29, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A30, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A31, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A25, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A26, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A27, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A28, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A29, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A30, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A31, tvb, offset, 1, FALSE);
 			offset++;
 
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A32, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A33, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A34, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A35, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A36, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A37, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A38, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A39, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A32, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A33, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A34, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A35, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A36, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A37, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A38, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A39, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A40, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A41, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A42, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A43, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A44, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A45, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A46, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A47, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A40, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A41, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A42, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A43, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A44, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A45, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A46, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_4_A47, tvb, offset, 1, FALSE);
 			offset++;
 
 			/* due to addition further down */
 			offset-=5;
 			break;
 		case 5:		/* SARI List Contents */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.6 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "SARI List Contents");
-			/* TODO */
+			/* TODO: See ETSI EN 300 175-3 V2.3.0  7.2.3.6 */
 			break;
-		case 6:		/* Multi-Frame No */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.7  */
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_6_Spare, tvb, offset, 2, ENC_BIG_ENDIAN);
+		case 6:		/* Multi-Frame No.    ETSI EN 300 175-3 V2.3.0  7.2.3.7  */
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_6_Spare, tvb, offset, 2, FALSE);
 			offset+=2;
 
 			ep_strbuf_append_printf(afield_str,"Multi-Frame No.: %s",tvb_bytes_to_str(tvb, offset, 3));
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_6_Mfn, tvb, offset, 3, ENC_NA);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Qt_6_Mfn, tvb, offset, 3, FALSE);
 			offset+=3;
 
 			/* due to addition further down */
 			offset-=5;
 			break;
-		case 7:		/* Escape */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.8 */
+		case 7:		/* Escape    ETSI EN 300 175-3 V2.3.0  7.2.3.8 */
 			ep_strbuf_append_printf(afield_str,"Escape Data: %s",tvb_bytes_to_str(tvb, offset, 5));
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 			break;
 		case 8:		/* Obsolete */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.1 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Obsolete");
 			break;
 		case 9:		/* Extended RF Carriers Part 2 */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.9 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Extended RF Carriers Part 2");
-			/* TODO */
+			/* TODO: See ETSI EN 300 175-3 V2.3.0  7.2.3.9 */
 			break;
 		case 11:	/* Transmit Information */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.10 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Transmit Information");
-			/* TODO */
+			/* TODO: See ETSI EN 300 175-3 V2.3.0  7.2.3.10 */
 			break;
 		case 12:	/* Extended Fixed Part Capabilities 2 */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.3.11 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Extended Fixed Part Capabilities 2");
-			/* TODO */
+			/* TODO: See ETSI EN 300 175-3 V2.3.0  7.2.3.11 */
 			break;
 		case 10:	/* Reserved */
 		case 13:
@@ -1699,14 +1628,11 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 			break;
 		}
 	}
-	else if(ta==DECT_TA_ESC)
+	else if(tailtype==5)				/* Escape */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  7.2.3.8 */
-		/* Provide hook for escape message dissector */
 	}
-	else if((ta==DECT_TA_MT)||((ta==DECT_TA_MT_FIRST)&&(dect_packet_type==DECT_PACKET_PP)))
+	else if((tailtype==6)||((tailtype==7)&&(dect_packet_type==DECT_PACKET_PP)))	/* Mt */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  7.2.5 */
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_TA, tvb, offset, 1, "[Mt]");
 
 		proto_tree_add_uint(ATail, hf_dect_A_Tail_Mt_Mh, tvb, offset, 1, tail_0);
@@ -1714,9 +1640,8 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 		switch(tail_0>>4)
 		{
 		case 0:		/* Basic Connection Control */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.2 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Basic Connection Control");
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_BasicConCtrl, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_BasicConCtrl, tvb, offset, 1, FALSE);
 			offset++;
 
 			if(((tail_0 & 0x0f)==6)||((tail_0 & 0x0f)==7))
@@ -1727,10 +1652,10 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 			}
 			else
 			{
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_fmid, tvb, offset, 2, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_fmid, tvb, offset, 2, FALSE);
 				offset++;
 
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_pmid, tvb, offset, 3, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_pmid, tvb, offset, 3, FALSE);
 				offset+=3;
 			}
 
@@ -1738,56 +1663,48 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 			offset-=5;
 			break;
 		case 1:		/* Advanced Connection Control */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.3 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Advanced Connection Control");
 			break;
 		case 2:		/* MAC Layer Test Messages */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.4 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "MAC Layer Test Messages");
 			break;
 		case 3:		/* Quality Control */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.5 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Quality Control");
 			break;
 		case 4:		/* Broadcast and Connectionless Services */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.6 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Broadcast and Connectionless Services");
 			break;
 		case 5:		/* Encryption Control */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.7 */
+
 			ep_strbuf_append_printf(afield_str,"Encryption Control: %s %s",
 				val_to_str((tail_0&0x0c)>>2, MTEncrCmd1_vals, "Error, please report: %d"),
 				val_to_str(tail_0&0x03, MTEncrCmd2_vals, "Error, please report: %d"));
 
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Encr_Cmd1, tvb, offset, 1, ENC_BIG_ENDIAN);
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Encr_Cmd2, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Encr_Cmd1, tvb, offset, 1, FALSE);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Encr_Cmd2, tvb, offset, 1, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_fmid, tvb, offset, 2, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_fmid, tvb, offset, 2, FALSE);
 			offset++;
 
-			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_pmid, tvb, offset, 3, ENC_BIG_ENDIAN);
+			proto_tree_add_item(ATail, hf_dect_A_Tail_Mt_Mh_pmid, tvb, offset, 3, FALSE);
 			offset+=3;
 
-			/* due to addition further down */
+			/* wegen addition weiter unten */
 			offset-=5;
 			break;
 		case 6:		/* Tail for use with the first Transmission of a B-Field \"bearer request\" Message */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.8 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Tail for use with the first Transmission of a B-Field \"bearer request\" Message");
 			break;
 		case 7:		/* Escape */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.9 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "Escape");
 			break;
 		case 8:		/* TARI Message */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.10 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "TARI Message");
 			break;
 		case 9:		/* REP Connection Control */
-			/* ETSI EN 300 175-3 V2.3.0  7.2.5.11 */
 			proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, "REP Connection Control");
 			break;
 		case 10:	/* Reserved */
@@ -1800,44 +1717,46 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 			break;
 		}
 	}
-	else if((ta==DECT_TA_PT)&&(dect_packet_type==DECT_PACKET_FP))
+	else if((tailtype==7)&&(dect_packet_type==DECT_PACKET_FP))	/* ETSI EN 300 175-3 V2.3.0  7.2.4  Pt */
 	{
-		/* ETSI EN 300 175-3 V2.3.0  7.2.4 */
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_TA, tvb, offset, 1, "[Pt]");
 
-		proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_ExtFlag, tvb, offset, 1, ENC_BIG_ENDIAN);
-		proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_SDU, tvb, offset, 1, ENC_BIG_ENDIAN);
+		proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_ExtFlag, tvb, offset, 1, FALSE);
+		proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_SDU, tvb, offset, 1, FALSE);
 
 		if(((tail_0&0x70)>>4)&0xfe)
 			ep_strbuf_append_printf(afield_str,"%s, ",val_to_str((tail_0&0x70)>>4, PTSDU_vals, "Error, please report: %d"));
-
+	
 		switch((tail_0&0x70)>>4)
 		{
 		case 0:		/* Zero Length Page */
 		case 1:		/* Short Page */
 			if(((tail_0&0x70)>>4)==0)
+#if 0
+XXX: Hier weitermachen
+#endif
 			{
-				ep_strbuf_append_printf(afield_str,"RFPI: xxxxx%.1x%.2x%.2x, ", (tail_0&0x0f), tail_1, tail_2);
-				proto_tree_add_none_format(atailti, hf_dect_A_Tail_Pt_RFPI, tvb, offset, 3, "RFPI: xxxxx%.1x%.2x%.2x", (tail_0&0x0f), tail_1, tail_2);
+				ep_strbuf_append_printf(afield_str,"RFPI: xxxxx%.1x%.2x%.2x, ", (pkt_afield->Tail[0]&0x0f), pkt_afield->Tail[1], pkt_afield->Tail[2]);
+				proto_tree_add_none_format(atailti, hf_dect_A_Tail_Pt_RFPI, tvb, offset, 3, "RFPI: xxxxx%.1x%.2x%.2x", (pkt_afield->Tail[0]&0x0f), pkt_afield->Tail[1], pkt_afield->Tail[2]);
 				offset+=3;
 
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_InfoType, tvb, offset, 1, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_InfoType, tvb, offset, 1, FALSE);
 			}
 			else
 			{
-				ep_strbuf_append_printf(afield_str,"Bs Data: %.1x%.2x%.2x, ", (tail_0&0x0f), tail_1, tail_2);
-				proto_tree_add_none_format(atailti, hf_dect_A_Tail_Pt_BsData, tvb, offset, 3, "Bs Data: %.1x%.2x%.2x", (tail_0&0x0f), tail_1, tail_2);
+				ep_strbuf_append_printf(afield_str,"Bs Data: %.1x%.2x%.2x, ", (pkt_afield->Tail[0]&0x0f), pkt_afield->Tail[1], pkt_afield->Tail[2]);
+				proto_tree_add_none_format(atailti, hf_dect_A_Tail_Pt_BsData, tvb, offset, 3, "Bs Data: %.1x%.2x%.2x", (pkt_afield->Tail[0]&0x0f), pkt_afield->Tail[1], pkt_afield->Tail[2]);
 				offset+=3;
 
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_InfoType, tvb, offset, 1, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_InfoType, tvb, offset, 1, FALSE);
 			}
 
-			ep_strbuf_append_printf(afield_str,"%s",val_to_str(tail_3>>4, PTInfoType_vals, "Error, please report: %d"));
+			ep_strbuf_append_printf(afield_str,"%s",val_to_str(pkt_afield->Tail[3]>>4, PTInfoType_vals, "Error, please report: %d"));
 
-			switch(tail_3>>4)
+			switch(pkt_afield->Tail[3]>>4)
 			{
 			case 0: /* Fill Bits */
-				proto_tree_add_none_format(ATail, hf_dect_A_Tail_Pt_Fillbits, tvb, offset, 2, "Fillbits: %.1x%.2x", tail_3&0x0f, tail_4);
+				proto_tree_add_none_format(ATail, hf_dect_A_Tail_Pt_Fillbits, tvb, offset, 2, "Fillbits: %.1x%.2x", pkt_afield->Tail[3]&0x0f, pkt_afield->Tail[4]);
 				offset+=2;
 				break;
 			case 1: /* Blind Full Slot Information for Circuit Mode Service */
@@ -1848,10 +1767,10 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 				break;
 			case 8: /* Dummy or connectionless Bearer Marker */
 				proto_tree_add_none_format(ATail, hf_dect_A_Tail_Pt_SlotPairs, tvb, offset, 2, " Slot-Pairs: %s%s%s%s%s%s%s%s%s%s%s%s available",
-					(tail_3&0x08)?" 0/12":"", (tail_3&0x04)?" 1/13":"", (tail_3&0x02)?" 2/14":"",
-					(tail_3&0x01)?" 3/15":"", (tail_4&0x80)?" 4/16":"", (tail_4&0x40)?" 5/17":"",
-					(tail_4&0x20)?" 6/18":"", (tail_4&0x10)?" 7/19":"", (tail_4&0x08)?" 8/20":"",
-					(tail_4&0x04)?" 9/21":"", (tail_4&0x02)?" 10/22":"", (tail_4&0x01)?" 11/23":"");
+					(pkt_afield->Tail[3]&0x08)?" 0/12":"", (pkt_afield->Tail[3]&0x04)?" 1/13":"", (pkt_afield->Tail[3]&0x02)?" 2/14":"",
+					(pkt_afield->Tail[3]&0x01)?" 3/15":"", (pkt_afield->Tail[4]&0x80)?" 4/16":"", (pkt_afield->Tail[4]&0x40)?" 5/17":"",
+					(pkt_afield->Tail[4]&0x20)?" 6/18":"", (pkt_afield->Tail[4]&0x10)?" 7/19":"", (pkt_afield->Tail[4]&0x08)?" 8/20":"",
+					(pkt_afield->Tail[4]&0x04)?" 9/21":"", (pkt_afield->Tail[4]&0x02)?" 10/22":"", (pkt_afield->Tail[4]&0x01)?" 11/23":"");
 
 				offset+=2;
 				break;
@@ -1860,11 +1779,11 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 			case 4: /* Good RFP Bearer */
 			case 5: /* Dummy or connectionless Bearer Position */
 			case 12: /* Connectionless Bearer Position */
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Sn, tvb, offset, 1, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Sn, tvb, offset, 1, FALSE);
 				offset++;
 
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Sp, tvb, offset, 1, ENC_BIG_ENDIAN);
-				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Cn, tvb, offset, 1, ENC_BIG_ENDIAN);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Sp, tvb, offset, 1, FALSE);
+				proto_tree_add_item(ATail, hf_dect_A_Tail_Pt_Bearer_Cn, tvb, offset, 1, FALSE);
 				offset++;
 				break;
 			case 6: /* Extended Modulation Types */
@@ -1915,99 +1834,111 @@ dissect_afield(gboolean dect_packet_type, guint8 *ba,
 		proto_tree_add_string(ColumnsTree, hf_dect_cc_AField, tvb, offset, 1, afield_str->str);
 	}
 
+
 	offset+=5;
 
 	/* R-CRC */
-	/* ETSI EN 300 175-3 V2.3.0  6.2.5.1 */
-	tvb_memcpy(tvb, rcrcdat, DECT_PACKET_INFO_LEN, 6);
+
+	memcpy(rcrcdat, pkt_ptr, 6);
 	rcrcdat[6]=0;
 	rcrcdat[7]=0;
-	computed_rcrc=calc_rcrc(rcrcdat);
-	if(computed_rcrc!=rcrc)
-		proto_tree_add_uint_format(afieldti, hf_dect_A_RCRC, tvb, offset, 2, 0, "R-CRC Error (Calc:%.4x, Recv:%.4x)", computed_rcrc, rcrc);
+	rcrc=calc_rcrc(rcrcdat);
+	if(rcrc!=pkt_afield->RCRC)
+		proto_tree_add_uint_format(afieldti, hf_dect_A_RCRC, tvb, offset, 2, 0, "R-CRC Error (Calc:%.4x, Recv:%.4x)", rcrc, pkt_afield->RCRC);
 	else
-		proto_tree_add_uint_format(afieldti, hf_dect_A_RCRC, tvb, offset, 2, 1, "R-CRC Match (Calc:%.4x, Recv:%.4x)", computed_rcrc, rcrc);
+		proto_tree_add_uint_format(afieldti, hf_dect_A_RCRC, tvb, offset, 2, 1, "R-CRC Match (Calc:%.4x, Recv:%.4x)", rcrc, pkt_afield->RCRC);
 
 	offset+=2;
+
+	/* **************** B-Field ************************************/
+	offset=dissect_bfield(dect_packet_type, header, pkt_bfield, pinfo, pkt_ptr, tvb, ti, DectTree, offset, ColumnsTree);
 }
 
 static void
 dissect_dect(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 {
-	proto_item *ti		=NULL;
-	proto_item *typeti	=NULL;
-	proto_tree *DectTree	=NULL;
-	gint offset		=0;
-
 	guint16			type;
 	guint			pkt_len;
-	guint8			ba;
+	const guint8		*pkt_ptr;
+	struct dect_afield	pkt_afield;
+	struct dect_bfield	pkt_bfield;
 
-	/************************** Custom Columns ****************************/
-	proto_item *columnstreeti;
-	proto_tree *ColumnsTree;
-
-	col_clear(pinfo->cinfo, COL_INFO);
-	col_append_fstr(pinfo->cinfo, COL_INFO, "Use Custom Columns for Infos");
-
-	col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT");
-
+	/* Packetpointer */
 	pkt_len=tvb_length(tvb);
 
 	if(pkt_len<=DECT_PACKET_INFO_LEN)
 	{
-		col_set_str(pinfo->cinfo, COL_INFO, "No Data");
+		col_set_str(pinfo->cinfo, COL_PROTOCOL, "No Data");
 		return;
 	}
 
-	ti=proto_tree_add_item(tree, proto_dect, tvb, 0, -1, ENC_NA);
-	DectTree=proto_item_add_subtree(ti, ett_dect);
+	pkt_ptr=tvb_get_ptr(tvb, DECT_PACKET_INFO_LEN, pkt_len-DECT_PACKET_INFO_LEN);
 
-	proto_tree_add_item(DectTree, hf_dect_transceivermode, tvb, offset, 1, ENC_BIG_ENDIAN);
-	offset++;
+	/* fill A-Field */
+	pkt_afield.Header=pkt_ptr[0];
+	memcpy((char*)(&(pkt_afield.Tail)), (char*)(pkt_ptr+1), 5);
+	pkt_afield.RCRC=(((guint16)pkt_ptr[6])<<8)|pkt_ptr[7];
 
-	proto_tree_add_item(DectTree, hf_dect_channel, tvb, offset, 1, ENC_BIG_ENDIAN);
-	offset++;
+	/* fill B-Field */
+	if(pkt_len>DECT_PACKET_INFO_LEN+2)
+		memcpy((char*)(&(pkt_bfield.Data)), (char*)(pkt_ptr+8), pkt_len-5-8);
+	else
+		memset((char*)(&(pkt_bfield.Data)), 0, 128);
+	pkt_bfield.Length=pkt_len-DECT_PACKET_INFO_LEN-8;
 
-	proto_tree_add_item(DectTree, hf_dect_slot, tvb, offset, 2, ENC_BIG_ENDIAN);
-	offset+=2;
+	col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT");
 
-	proto_tree_add_item(DectTree, hf_dect_framenumber, tvb, offset, 1, ENC_BIG_ENDIAN);
-	offset++;
+	/* Clear out stuff in the info column */
+	col_clear(pinfo->cinfo, COL_INFO);
+	if(tree)
+	{
+		proto_item *ti		=NULL;
+		proto_item *typeti	=NULL;
+		proto_tree *DectTree	=NULL;
+		gint offset		=0;
 
-	proto_tree_add_item(DectTree, hf_dect_rssi, tvb, offset, 1, ENC_BIG_ENDIAN);
-	offset++;
+		ti=proto_tree_add_item(tree, proto_dect, tvb, 0, -1, FALSE);
 
-	proto_tree_add_item(DectTree, hf_dect_preamble, tvb, offset, 3, ENC_NA);
-	offset+=3;
+		DectTree=proto_item_add_subtree(ti, ett_dect);
+		proto_tree_add_item(DectTree, hf_dect_transceivermode, tvb, offset, 1, FALSE);
+		offset++;
 
-	typeti=proto_tree_add_item(DectTree, hf_dect_type, tvb, offset, 2, ENC_NA);
+		proto_tree_add_item(DectTree, hf_dect_channel, tvb, offset, 1, FALSE);
+		offset++;
 
-	type=tvb_get_ntohs(tvb, offset);
-	offset+=2;
+		proto_tree_add_item(DectTree, hf_dect_slot, tvb, offset, 2, FALSE);
+		offset+=2;
 
-	columnstreeti = proto_tree_add_item(DectTree, hf_dect_cc, tvb, 0, 0, ENC_NA);
-	ColumnsTree   = proto_item_add_subtree(columnstreeti, ett_afield);
+		proto_tree_add_item(DectTree, hf_dect_framenumber, tvb, offset, 1, FALSE);
+		offset++;
 
-	switch(type) {
-	case 0x1675:
-		col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT PP");
-		proto_item_append_text(typeti, " Phone Packet");
-		dissect_afield(DECT_PACKET_PP, &ba, pinfo, tvb, offset, DectTree, ColumnsTree);
-		offset += DECT_AFIELD_SIZE;
-		dissect_bfield(DECT_PACKET_PP, ba, pinfo, tvb, offset, DectTree, ColumnsTree);
-		break;
-	case 0xe98a:
-		col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT RFP");
-		proto_item_append_text(typeti, " Station Packet");
-		dissect_afield(DECT_PACKET_FP, &ba, pinfo, tvb, offset, DectTree, ColumnsTree);
-		offset += DECT_AFIELD_SIZE;
-		dissect_bfield(DECT_PACKET_FP, ba, pinfo, tvb, offset, DectTree, ColumnsTree);
-		break;
-	default:
-		col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT Unk");
-		proto_item_append_text(typeti, " Unknown Packet");
-		break;
+		proto_tree_add_item(DectTree, hf_dect_rssi, tvb, offset, 1, FALSE);
+		offset++;
+
+		proto_tree_add_item(DectTree, hf_dect_preamble, tvb, offset, 3, FALSE);
+		offset+=3;
+
+		typeti=proto_tree_add_item(DectTree, hf_dect_type, tvb, offset, 2, FALSE);
+
+		type=tvb_get_ntohs(tvb, offset);
+		offset+=2;
+
+		switch(type) {
+		case 0x1675:
+			col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT PP");
+			proto_item_append_text(typeti, " Phone Packet");
+			dissect_decttype(DECT_PACKET_PP, &pkt_afield, &pkt_bfield, pinfo, pkt_ptr, tvb, ti, DectTree);
+			break;
+		case 0xe98a:
+			col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT RFP");
+			proto_item_append_text(typeti, " Station Packet");
+			dissect_decttype(DECT_PACKET_FP, &pkt_afield, &pkt_bfield, pinfo, pkt_ptr, tvb, ti, DectTree);
+			break;
+		default:
+			col_set_str(pinfo->cinfo, COL_PROTOCOL, "DECT Unk");
+			proto_item_append_text(typeti, " Unknown Packet");
+			break;
+		}
 	}
 }
 
@@ -2075,23 +2006,23 @@ proto_register_dect(void)
 
 		{ &hf_dect_A_Head_TA_FP,
 		{"TA", "dect.afield.head.TA", FT_UINT8, BASE_DEC, VALS(TA_vals_FP),
-			DECT_A_TA_MASK, NULL, HFILL}},
+			0xE0, NULL, HFILL}},
 
 		{ &hf_dect_A_Head_TA_PP,
 		{"TA", "dect.afield.head.TA", FT_UINT8, BASE_DEC, VALS(TA_vals_PP),
-			DECT_A_TA_MASK, NULL, HFILL}},
+			0xE0, NULL, HFILL}},
 
 		{ &hf_dect_A_Head_Q1,
 		{"Q1", "dect.afield.head.Q1", FT_UINT8, BASE_DEC, NULL,
-			DECT_A_Q1_MASK, NULL, HFILL}},
+			0x10, NULL, HFILL}},
 
 		{ &hf_dect_A_Head_BA,
 		{"BA", "dect.afield.head.BA", FT_UINT8, BASE_DEC, VALS(BA_vals),
-			DECT_A_BA_MASK, NULL, HFILL}},
+			0x0E, NULL, HFILL}},
 
 		{ &hf_dect_A_Head_Q2,
 		{"Q2", "dect.afield.head.Q2", FT_UINT8, BASE_DEC, NULL,
-			DECT_A_Q2_MASK, NULL, HFILL}},
+			0x01, NULL, HFILL}},
 
 	/* ***** Tail ***** */
 		{ &hf_dect_A_Tail,
@@ -2139,7 +2070,7 @@ proto_register_dect(void)
 		{ &hf_dect_A_Tail_Qt_0_CA,
 		{"CA", "dect.afield.tail.Qt.CA", FT_NONE, BASE_NONE, NULL,
 			0x0, NULL, HFILL}},
-
+			
 	/* Byte 3 */
 		{ &hf_dect_A_Tail_Qt_0_Spr1,
 		{"Spr1", "dect.afield.tail.Qt.Spr1", FT_UINT8, BASE_DEC, VALS(QTSpr_vals),
@@ -2450,7 +2381,7 @@ proto_register_dect(void)
 
 		{ &hf_dect_A_Tail_Qt_6_Mfn,
 		{"Multiframe Number", "dect.afield.tail.Qt.Mfn.Mfn", FT_BYTES, BASE_NONE, NULL,
-			0x0, NULL, HFILL}},
+			0, NULL, HFILL}},
 
 
 	/* Mt */
@@ -2464,7 +2395,7 @@ proto_register_dect(void)
 
 		{ &hf_dect_A_Tail_Mt_Mh_fmid,
 		{"Mh/FMID", "dect.afield.tail.Mt.Mh.fmid", FT_UINT16, BASE_HEX, NULL,
-			0xFFF0, NULL, HFILL}},
+			0x0FF0, NULL, HFILL}},
 
 		{ &hf_dect_A_Tail_Mt_Mh_pmid,
 		{"Mh/PMID", "dect.afield.tail.Mt.Mh.pmid", FT_UINT24, BASE_HEX, NULL,
