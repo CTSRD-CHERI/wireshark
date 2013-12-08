@@ -1,0 +1,1 @@
+make NM=/home/bed22/SDK/sdk/nm CC=/home/bed22/SDK/sdk/bin/cheri-unknown-freebsd-clang -v -integrated-as --sysroot=/home/bed22/SDK/sdk -B/home/bed22/SDK/sdk -Wl,-melf64btsmip_fbsd SYSROOT=/home/bed22/SDK/sdk -j16
