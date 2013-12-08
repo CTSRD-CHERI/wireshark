@@ -24,3 +24,4 @@ register-cache.pkl
 sminmpec.c
 tshark-tap-register-cache.pkl
 minishark/minishark
+.depend
