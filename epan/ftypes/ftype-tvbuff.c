@@ -33,27 +33,33 @@
 static void
 value_new(fvalue_t *fv)
 {
+#if !__has_feature(capabilities)
 	fv->value.tvb = NULL;
 	fv->tvb_is_private = FALSE;
+#endif
 }
 
 static void
 value_free(fvalue_t *fv)
 {
+#if !__has_feature(capabilities)
 	if (fv->value.tvb && fv->tvb_is_private) {
 		tvb_free_chain(fv->value.tvb);
 	}
+#endif
 }
 
 static void
 value_set(fvalue_t *fv, gpointer value, gboolean already_copied)
 {
+#if !__has_feature(capabilities)
 	g_assert(already_copied);
 
 	/* Free up the old value, if we have one */
 	value_free(fv);
 
 	fv->value.tvb = (tvbuff_t *)value;
+#endif
 }
 
 static void
@@ -80,9 +86,11 @@ val_from_string(fvalue_t *fv, char *s, LogFunc logfunc _U_)
 	/* Let the tvbuff know how to delete the data. */
 	tvb_set_free_cb(new_tvb, free_tvb_data);
 
+#if !__has_feature(capabilities)
 	/* And let us know that we need to free the tvbuff */
 	fv->tvb_is_private = TRUE;
 	fv->value.tvb = new_tvb;
+#endif
 	return TRUE;
 }
 
@@ -172,7 +180,11 @@ val_to_repr(fvalue_t *fv, ftrepr_t rtype, char * volatile buf)
 static gpointer
 value_get(fvalue_t *fv)
 {
+#if !__has_feature(capabilities)
 	return fv->value.tvb;
+#else
+	return NULL;
+#endif
 }
 
 static guint

@@ -28,7 +28,7 @@
 
 typedef struct {
 	/** The backing tvbuff_t */
-	struct tvbuff	*tvb;
+	tvbuff_t	*tvb;
 
 	/** The offset of 'tvb' to which I'm privy */
 	guint		offset;
@@ -62,7 +62,7 @@ struct tvbuff {
 	tvbuff_type		type;
 	gboolean		initialized;
 	guint			flags;
-	struct tvbuff		*ds_tvb;  /**< data source top-level tvbuff */
+	tvbuff_t		*ds_tvb;  /**< data source top-level tvbuff */
 
 	/** TVBUFF_SUBSET and TVBUFF_COMPOSITE keep track
 	 * of the other tvbuff's they use */
@@ -77,7 +77,7 @@ struct tvbuff {
 	 * which has flattened its data due to a call
 	 * to tvb_get_ptr().
 	 */
-	const guint8		*real_data;
+	const __capability guint8	*real_data;
 
 	/** Length of virtual buffer (and/or real_data). */
 	guint			length;
@@ -91,5 +91,7 @@ struct tvbuff {
 	/** Func to call when actually freed */
 	tvbuff_free_cb_t	free_cb;
 };
+#define tvb_backing_t	__capability tvb_backing_t
+#define tvb_comp_t	__capability tvb_comp_t
 
 #endif

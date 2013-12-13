@@ -37,6 +37,9 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+#include <machine/cheric.h>
+
 #include <string.h>
 
 #ifdef HAVE_LIBZ
@@ -110,6 +113,18 @@ tvb_new(const tvbuff_type type)
 	return tvb;
 }
 
+tvbuff_t **
+tvb_new_capholder(tvbuff_t *tvb)
+{
+	return g_malloc(sizeof(struct tvbuff));
+}
+
+static void
+tvb_free_capholder(gpointer foo)
+{
+	g_free(foo);
+}
+
 static void
 tvb_free_internal(tvbuff_t *tvb)
 {
@@ -134,7 +149,7 @@ tvb_free_internal(tvbuff_t *tvb)
 		case TVBUFF_COMPOSITE:
 			composite = &tvb->tvbuffs.composite;
 
-			g_slist_free(composite->tvbs);
+			g_slist_free_full(composite->tvbs, tvb_free_capholder);
 
 			g_free(composite->start_offsets);
 			g_free(composite->end_offsets);
@@ -150,7 +165,7 @@ tvb_free_internal(tvbuff_t *tvb)
 			DISSECTOR_ASSERT_NOT_REACHED();
 	}
 
-	g_slice_free(tvbuff_t, tvb);
+	g_slice_free(struct tvbuff, cheri_getbase(tvb));
 }
 
 /* XXX: just call tvb_free_chain();
@@ -217,7 +232,7 @@ tvb_new_real_data(const guint8* data, const guint length, const gint reported_le
 
 	tvb = tvb_new(TVBUFF_REAL_DATA);
 
-	tvb->real_data       = data;
+	tvb->real_data       = cheri_ptr(data, length);
 	tvb->length          = length;
 	tvb->reported_length = reported_length;
 	tvb->initialized     = TRUE;
@@ -616,7 +631,8 @@ tvb_composite_append(tvbuff_t *tvb, tvbuff_t *member)
 	DISSECTOR_ASSERT(member->length);
 
 	composite       = &tvb->tvbuffs.composite;
-	composite->tvbs = g_slist_append(composite->tvbs, member);
+	composite->tvbs = g_slist_append(composite->tvbs,
+	    tvb_new_capholder(member));
 }
 
 void
@@ -633,7 +649,8 @@ tvb_composite_prepend(tvbuff_t *tvb, tvbuff_t *member)
 	DISSECTOR_ASSERT(member->length);
 
 	composite       = &tvb->tvbuffs.composite;
-	composite->tvbs = g_slist_prepend(composite->tvbs, member);
+	composite->tvbs = g_slist_prepend(composite->tvbs,
+	    tvb_new_capholder(member));
 }
 
 
@@ -665,14 +682,14 @@ tvb_composite_finalize(tvbuff_t *tvb)
 
 	for (slist = composite->tvbs; slist != NULL; slist = slist->next) {
 		DISSECTOR_ASSERT((guint) i < num_members);
-		member_tvb = (tvbuff_t *)slist->data;
+		member_tvb = *(tvbuff_t**)slist->data;
 		composite->start_offsets[i] = tvb->length;
 		tvb->length += member_tvb->length;
 		tvb->reported_length += member_tvb->reported_length;
 		composite->end_offsets[i] = tvb->length - 1;
 		i++;
 	}
-	add_to_chain((tvbuff_t *)composite->tvbs->data, tvb); /* chain composite tvb to first member */
+	add_to_chain(*(tvbuff_t **)composite->tvbs->data, tvb); /* chain composite tvb to first member */
 	tvb->initialized = TRUE;
 }
 
@@ -874,7 +891,7 @@ offset_from_real_beginning(const tvbuff_t *tvb, const guint counter)
 			member = tvb->tvbuffs.subset.tvb;
 			return offset_from_real_beginning(member, counter + tvb->tvbuffs.subset.offset);
 		case TVBUFF_COMPOSITE:
-			member = (tvbuff_t *)tvb->tvbuffs.composite.tvbs->data;
+			member = *(tvbuff_t **)tvb->tvbuffs.composite.tvbs->data;
 			return offset_from_real_beginning(member, counter);
 	}
 
@@ -907,7 +924,7 @@ composite_ensure_contiguous_no_exception(tvbuff_t *tvb, const guint abs_offset, 
 	for (i = 0; i < num_members; i++) {
 		if (abs_offset <= composite->end_offsets[i]) {
 			slist = g_slist_nth(composite->tvbs, i);
-			member_tvb = (tvbuff_t *)slist->data;
+			member_tvb = *((tvbuff_t **)slist->data);
 			break;
 		}
 	}
@@ -945,8 +962,9 @@ ensure_contiguous_no_exception(tvbuff_t *tvb, const gint offset, const gint leng
 	 * We know that all the data is present in the tvbuff, so
 	 * no exceptions should be thrown.
 	 */
+	/* XXXBD is this used outside the dissectors? */
 	if (tvb->real_data) {
-		return tvb->real_data + abs_offset;
+		return cheri_getbase(tvb->real_data) + abs_offset;
 	}
 	else {
 		switch(tvb->type) {
@@ -997,7 +1015,7 @@ fast_ensure_contiguous(tvbuff_t *tvb, const gint offset, const guint length)
 	end_offset = u_offset + length;
 
 	if (end_offset <= tvb->length) {
-		return tvb->real_data + u_offset;
+		return cheri_getbase(tvb->real_data) + u_offset;
 	}
 
 	if (end_offset > tvb->reported_length) {
@@ -1059,7 +1077,7 @@ composite_memcpy(tvbuff_t *tvb, guint8* target, guint abs_offset, size_t abs_len
 	for (i = 0; i < num_members; i++) {
 		if (abs_offset <= composite->end_offsets[i]) {
 			slist = g_slist_nth(composite->tvbs, i);
-			member_tvb = (tvbuff_t *)slist->data;
+			member_tvb = *(tvbuff_t **)slist->data;
 			break;
 		}
 	}
@@ -1121,7 +1139,7 @@ tvb_memcpy(tvbuff_t *tvb, void *target, const gint offset, size_t length)
 	check_offset_length(tvb, offset, (gint) length, &abs_offset, &abs_length);
 
 	if (tvb->real_data) {
-		return memcpy(target, tvb->real_data + abs_offset, abs_length);
+		return memcpy(target, (guint8 *)tvb->real_data + abs_offset, abs_length);
 	}
 
 	switch(tvb->type) {
@@ -1929,12 +1947,12 @@ tvb_find_guint8(tvbuff_t *tvb, const gint offset, const gint maxlength, const gu
 
 	/* If we have real data, perform our search now. */
 	if (tvb->real_data) {
-		result = (const guint8 *)memchr(tvb->real_data + abs_offset, needle, limit);
+		result = (const guint8 *)memchr(cheri_getbase(tvb->real_data) + abs_offset, needle, limit);
 		if (result == NULL) {
 			return -1;
 		}
 		else {
-			return (gint) (result - tvb->real_data);
+			return (gint) (result - (const guint8 *)cheri_getbase(tvb->real_data));
 		}
 	}
 
@@ -1994,12 +2012,12 @@ tvb_pbrk_guint8(tvbuff_t *tvb, const gint offset, const gint maxlength, const gu
 
 	/* If we have real data, perform our search now. */
 	if (tvb->real_data) {
-		result = guint8_pbrk(tvb->real_data + abs_offset, limit, needles, found_needle);
+		result = guint8_pbrk(cheri_getbase(tvb->real_data) + abs_offset, limit, needles, found_needle);
 		if (result == NULL) {
 			return -1;
 		}
 		else {
-			return (gint) (result - tvb->real_data);
+			return (gint) (result - (const guint8 *)cheri_getbase(tvb->real_data));
 		}
 	}
 
@@ -3670,7 +3688,7 @@ tvb_set_fragment(tvbuff_t *tvb)
 	tvb->flags |= TVBUFF_FRAGMENT;
 }
 
-struct tvbuff *
+tvbuff_t *
 tvb_get_ds_tvb(tvbuff_t *tvb)
 {
 	return(tvb->ds_tvb);

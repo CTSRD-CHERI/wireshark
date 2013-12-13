@@ -24,6 +24,9 @@
 
 #include "config.h"
 
+#include "sys/types.h"
+#include "machine/cheric.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -267,13 +270,14 @@ static GList *protocols = NULL;
 
 /* Contains the space for proto_nodes. */
 #define PROTO_NODE_NEW(node)				\
-	node = g_slice_new(proto_node);			\
+	node = cheri_ptr(g_slice_new(struct _p_node),	\
+	    sizeof(struct _p_node));			\
 	node->first_child = NULL;			\
 	node->last_child = NULL;			\
 	node->next = NULL;
 
 #define PROTO_NODE_FREE(node)				\
-	g_slice_free(proto_node, node)
+	g_slice_free(struct _p_node, cheri_getbase(node))
 
 /* String space for protocol and field items for the GUI */
 #define ITEM_LABEL_NEW(il)				\
@@ -1893,7 +1897,10 @@ ptvcursor_advance(ptvcursor_t* ptvc, gint length)
 static void
 proto_tree_set_protocol_tvb(field_info *fi, tvbuff_t *tvb)
 {
+	/* XXX CAP */
+#if !__has_feature(capabilities)
 	fvalue_set(&fi->value, tvb, TRUE);
+#endif
 }
 
 /* Add a FT_PROTOCOL to a proto_tree */
@@ -4360,7 +4367,7 @@ proto_item_add_subtree(proto_item *pi,	const gint idx) {
 }
 
 proto_tree *
-proto_item_get_subtree(const proto_item *pi) {
+proto_item_get_subtree(proto_item *pi) {
 	field_info *fi;
 
 	if (!pi)
@@ -4368,7 +4375,7 @@ proto_item_get_subtree(const proto_item *pi) {
 	fi = PITEM_FINFO(pi);
 	if ( (!fi) || (fi->tree_type == -1) )
 		return NULL;
-	return (proto_tree *)pi;
+	return pi;
 }
 
 proto_item *

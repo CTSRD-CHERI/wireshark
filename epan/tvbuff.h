@@ -35,6 +35,8 @@
 #ifndef __TVBUFF_H__
 #define __TVBUFF_H__
 
+#include <sys/cdefs.h>
+
 #include <glib.h>
 #include <epan/ipv6-utils.h>
 #include <epan/guid-utils.h>
@@ -63,6 +65,9 @@ typedef enum {
 
 struct tvbuff;
 typedef struct tvbuff tvbuff_t;
+#if __has_feature(capabilities)
+#define tvbuff_t	__capability tvbuff_t
+#endif
 
 /**
  * tvbuffs: dissector use and management
@@ -260,7 +265,7 @@ WS_DLL_PUBLIC gint tvb_raw_offset(tvbuff_t *tvb);
 /** Set the "this is a fragment" flag. */
 WS_DLL_PUBLIC void tvb_set_fragment(tvbuff_t *tvb);
 
-WS_DLL_PUBLIC struct tvbuff *tvb_get_ds_tvb(tvbuff_t *tvb);
+WS_DLL_PUBLIC tvbuff_t *tvb_get_ds_tvb(tvbuff_t *tvb);
 
 
 /************** START OF ACCESSORS ****************/

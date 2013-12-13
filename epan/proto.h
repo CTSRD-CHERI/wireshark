@@ -476,11 +476,11 @@ typedef struct {
 } tree_data_t;
 
 /** Each proto_tree, proto_item is one of these. */
-typedef struct _proto_node {
-	struct _proto_node *first_child;
-	struct _proto_node *last_child;
-	struct _proto_node *next;
-	struct _proto_node *parent;
+typedef struct _p_node {
+	__capability struct _p_node *first_child;
+	__capability struct _p_node *last_child;
+	__capability struct _p_node *next;
+	__capability struct _p_node *parent;
 	field_info  *finfo;
 	tree_data_t *tree_data;
 } proto_node;
@@ -489,6 +489,10 @@ typedef struct _proto_node {
 typedef proto_node proto_tree;
 /** A protocol item element. */
 typedef proto_node proto_item;
+
+#define proto_node	__capability proto_node
+#define proto_tree	__capability proto_tree
+#define proto_item	__capability proto_item
 
 /*
  * Expert information.
@@ -629,7 +633,7 @@ WS_DLL_PUBLIC proto_tree* proto_item_add_subtree(proto_item *ti, const gint idx)
 /** Get an existing subtree under an item.
  @param ti the parent item of the subtree
  @return the subtree or NULL */
-WS_DLL_PUBLIC proto_tree* proto_item_get_subtree(const proto_item *ti);
+WS_DLL_PUBLIC proto_tree* proto_item_get_subtree(proto_item *ti);
 
 /** Get the parent of a subtree item.
  @param ti the child item in the subtree
@@ -732,7 +736,7 @@ proto_tree_prime_hfid(proto_tree *tree, const int hfid);
 /** Get a parent item of a subtree.
  @param tree the tree to get the parent from
  @return parent item */
-WS_DLL_PUBLIC proto_item* proto_tree_get_parent(const proto_tree *tree);
+WS_DLL_PUBLIC proto_item* proto_tree_get_parent(proto_tree *tree);
 
 /** Get the root tree from any subtree.
  @param tree the tree to get the root from
