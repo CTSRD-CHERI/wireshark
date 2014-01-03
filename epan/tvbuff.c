@@ -941,8 +941,10 @@ composite_ensure_contiguous_no_exception(tvbuff_t *tvb, const guint abs_offset, 
 		return ensure_contiguous_no_exception(member_tvb, member_offset, member_length, NULL);
 	}
 	else {
-		tvb->real_data = (guint8 *)tvb_memdup(tvb, 0, -1);
-		return tvb->real_data + abs_offset;
+		tvb->real_data = cheri_ptr(tvb_memdup(tvb, 0, -1),
+		    tvb_length(tvb));
+		/* XXXBD is this used outside the dissectors? */
+		return cheri_getbase(tvb->real_data) + abs_offset;
 	}
 
 	DISSECTOR_ASSERT_NOT_REACHED();
@@ -987,7 +989,7 @@ static const guint8*
 ensure_contiguous(tvbuff_t *tvb, const gint offset, const gint length)
 {
 	int           exception = 0;
-	const guint8 *p;
+	guint8 const *p;
 
 	p = ensure_contiguous_no_exception(tvb, offset, length, &exception);
 	if (p == NULL) {
