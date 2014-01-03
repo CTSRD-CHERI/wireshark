@@ -2,12 +2,14 @@ LIBDIRS=	libairpdcap \
 		libminitap \
 		libminishark \
 		libui \
-		libwiretap \
-		libwireshark \
 		libwsutil \
 		libwmem
-PROGDIRS=	minishark \
-		tshark
+PROGDIRS=	dumpcap \
+		minishark
+
+#		libwiretap \
+#		libwireshark \
+#		tshark
 
 TGTS=	all clean depend obj
 
