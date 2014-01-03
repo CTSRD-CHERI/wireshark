@@ -4399,7 +4399,7 @@ proto_item_get_parent_nth(proto_item *ti, int gen) {
 
 
 proto_item *
-proto_tree_get_parent(const proto_tree *tree) {
+proto_tree_get_parent(proto_tree *tree) {
 	if (!tree)
 		return NULL;
 	return (proto_item *)tree;
