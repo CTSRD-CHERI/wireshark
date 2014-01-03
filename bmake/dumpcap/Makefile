@@ -1,5 +1,6 @@
 PROG=	dumpcap
 NO_MAN=
+NO_SHARED=
 
 .PATH:	${.CURDIR}/../..
 SRCS=	\
@@ -24,6 +25,7 @@ CFLAGS+=	-I${.CURDIR}/.. \
 		-I/usr/local/include/glib-2.0
 LDADD+=		-lpcap -lz \
 		-L/usr/local/lib -lglib-2.0 \
-		-L../libwsutil -L${.CURDIR}/../libwsutil -lwsutil
+		-L../libwsutil -L${.CURDIR}/../libwsutil -lwsutil \
+		-pthread -liconv -lintl
 
 .include <bsd.prog.mk>
